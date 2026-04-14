@@ -2,8 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Navigation, Play, Pause, SkipForward, SkipBack, 
   Settings, Video, Music, Map, Camera, Bell, Car, 
-  Download, MapPin, AlertTriangle, Battery, Wifi, 
-  Menu, Volume2
+  MapPin, AlertTriangle, Battery, Wifi, Menu, Volume2
 } from 'lucide-react';
 
 // --- CONFIGURACIÓN INICIAL ---
@@ -14,13 +13,36 @@ export default function CarLauncher() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [speed, setSpeed] = useState(0);
   const [activeTab, setActiveTab] = useState('home'); 
-  const [notifications, setNotifications] = useState([]);
   
   // Settings State
   const [carColor, setCarColor] = useState('#3b82f6'); 
   const [carModel, setCarModel] = useState(DEFAULT_CAR);
   const [offlineMapDownloaded, setOfflineMapDownloaded] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
+
+  // Referencia al Plugin Nativo (Se inicializa dinámicamente)
+  const mediaPluginRef = useRef(null);
+
+  // --- ESTADO DEL REPRODUCTOR NATIVO REAL ---
+  const [mediaData, setMediaData] = useState({
+    title: "Esperando música...",
+    artist: "Abre tu reproductor",
+    albumArt: "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=400&auto=format&fit=crop", 
+    isPlaying: false,
+    duration: "0:00",
+    position: "0:00",
+    progressPercent: 0
+  });
+
+  // Inyección de Tailwind CSS
+  useEffect(() => {
+    if (!document.getElementById('tailwind-cdn')) {
+      const script = document.createElement('script');
+      script.id = 'tailwind-cdn';
+      script.src = 'https://cdn.tailwindcss.com';
+      document.head.appendChild(script);
+    }
+  }, []);
 
   // Reloj
   useEffect(() => {
@@ -43,6 +65,47 @@ export default function CarLauncher() {
     }
     return () => { if (watchId) navigator.geolocation.clearWatch(watchId); };
   }, []);
+
+  // Inicialización del Listener de Música Nativa
+  useEffect(() => {
+    let listener = null;
+    const initMediaListener = async () => {
+      try {
+        // Usamos importación dinámica para evitar errores en entornos sin Capacitor
+        const corePkg = '@capacitor/core';
+        const { registerPlugin } = await import(/* @vite-ignore */ corePkg);
+        mediaPluginRef.current = registerPlugin('MediaListenerPlugin');
+
+        // Escuchamos los eventos desde Android
+        listener = await mediaPluginRef.current.addListener('mediaUpdate', (info) => {
+          setMediaData({
+            title: info.title || "Desconocido",
+            artist: info.artist || "Desconocido",
+            albumArt: info.albumArt ? `data:image/jpeg;base64,${info.albumArt}` : "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=400&auto=format&fit=crop",
+            isPlaying: info.isPlaying || false,
+            duration: info.duration || "0:00",
+            position: info.position || "0:00",
+            progressPercent: info.progressPercent || 0
+          });
+        });
+      } catch (e) {
+        console.warn("Plugin nativo de música no detectado o en vista previa web.");
+      }
+    };
+    initMediaListener();
+    return () => { if(listener) listener.remove(); }
+  }, []);
+
+  // Controles de Música Reales
+  const handleMediaControl = async (action) => {
+    try {
+      if (mediaPluginRef.current) {
+        await mediaPluginRef.current.controlMedia({ action });
+      }
+    } catch (e) {
+      console.warn(`No se pudo enviar el comando ${action}`);
+    }
+  };
 
   return (
     <div className="h-screen w-screen bg-gray-950 text-white font-sans overflow-hidden flex flex-col select-none">
@@ -78,7 +141,7 @@ export default function CarLauncher() {
         {/* PANTALLAS */}
         <div className="flex-1 p-4 relative">
           <div className={`absolute inset-0 transition-opacity duration-500 p-4 ${activeTab === 'home' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-            <HomeView speed={speed} setTab={setActiveTab} carModel={carModel} carColor={carColor} />
+            <HomeView speed={speed} setTab={setActiveTab} carModel={carModel} carColor={carColor} mediaData={mediaData} handleMediaControl={handleMediaControl} />
           </div>
           
           <div className={`absolute inset-0 transition-opacity duration-500 p-4 ${activeTab === 'map' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
@@ -86,7 +149,7 @@ export default function CarLauncher() {
           </div>
           
           <div className={`absolute inset-0 transition-opacity duration-500 p-4 ${activeTab === 'media' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-            <MediaView />
+            <MediaView mediaData={mediaData} handleMediaControl={handleMediaControl} />
           </div>
 
           <div className={`absolute inset-0 transition-opacity duration-500 p-4 ${activeTab === 'dashcam' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
@@ -129,7 +192,7 @@ const WidgetCard = ({ children, className = "" }) => (
 );
 
 // --- 1. VISTA DE INICIO (DASHBOARD) ---
-const HomeView = ({ speed, setTab, carModel, carColor }) => (
+const HomeView = ({ speed, setTab, carModel, carColor, mediaData, handleMediaControl }) => (
   <div className="h-full w-full grid grid-cols-12 grid-rows-6 gap-4">
     
     {/* MAPA 3D WIDGET */}
@@ -149,7 +212,6 @@ const HomeView = ({ speed, setTab, carModel, carColor }) => (
         <div className="w-full h-full" style={{ transform: 'rotateX(55deg) scale(1.6)', transformOrigin: 'bottom center', transition: 'transform 0.5s' }}>
             <MapView carColor={carColor} is3D={true} />
         </div>
-        {/* Gradiente para difuminar el horizonte */}
         <div className="absolute top-0 left-0 w-full h-1/3 bg-gradient-to-b from-gray-900 to-transparent z-10 pointer-events-none"></div>
       </div>
     </WidgetCard>
@@ -178,37 +240,38 @@ const HomeView = ({ speed, setTab, carModel, carColor }) => (
       </div>
     </WidgetCard>
 
-    {/* MEDIA MINI WIDGET */}
-    <WidgetCard className="col-span-4 row-span-3 flex flex-col p-5 justify-between cursor-pointer relative overflow-hidden" >
-      <div className="absolute top-0 left-0 w-full h-full bg-[url('https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=400&auto=format&fit=crop')] bg-cover bg-center opacity-20 blur-sm"></div>
+    {/* MEDIA MINI WIDGET (Datos Reales) */}
+    <WidgetCard className="col-span-4 row-span-3 flex flex-col p-5 justify-between relative overflow-hidden" >
+      <div className="absolute top-0 left-0 w-full h-full bg-cover bg-center opacity-30 blur-md transition-all duration-500" style={{ backgroundImage: `url(${mediaData.albumArt})` }}></div>
+      <div className="absolute inset-0 bg-black/40 z-0"></div>
       
-      <div className="relative z-10 flex items-center gap-4">
-        <div className="w-14 h-14 bg-gradient-to-br from-[#1DB954] to-emerald-700 rounded-2xl flex items-center justify-center shadow-lg">
-          <Music size={28} className="text-white" />
+      <div className="relative z-10 flex items-center gap-4 cursor-pointer" onClick={() => setTab('media')}>
+        <div className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-lg overflow-hidden border border-white/10">
+          <img src={mediaData.albumArt} alt="Album" className="w-full h-full object-cover" />
         </div>
         <div className="flex-1 overflow-hidden">
-          <h3 className="font-bold text-white text-lg truncate">Blinding Lights</h3>
-          <p className="text-sm text-gray-300 truncate">The Weeknd</p>
+          <h3 className="font-bold text-white text-lg truncate drop-shadow-md">{mediaData.title}</h3>
+          <p className="text-sm text-gray-300 truncate drop-shadow-md">{mediaData.artist}</p>
         </div>
       </div>
       
       <div className="relative z-10">
           <div className="w-full h-1.5 bg-gray-700/50 rounded-full overflow-hidden mb-4">
-              <div className="h-full bg-[#1DB954] w-1/3"></div>
+              <div className="h-full bg-white transition-all duration-1000" style={{ width: `${mediaData.progressPercent}%` }}></div>
           </div>
           <div className="flex justify-center items-center gap-6">
-            <button className="text-gray-300 hover:text-white transition-colors"><SkipBack size={24} /></button>
-            <button onClick={() => setTab('media')} className="w-14 h-14 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-[0_0_20px_rgba(255,255,255,0.4)]">
-            <Pause size={28} />
+            <button onClick={() => handleMediaControl('PREVIOUS')} className="text-gray-300 hover:text-white transition-colors"><SkipBack size={24} /></button>
+            <button onClick={() => handleMediaControl('PLAY_PAUSE')} className="w-14 h-14 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-[0_0_20px_rgba(255,255,255,0.4)]">
+                {mediaData.isPlaying ? <Pause size={28} /> : <Play size={28} className="ml-1" />}
             </button>
-            <button className="text-gray-300 hover:text-white transition-colors"><SkipForward size={24} /></button>
+            <button onClick={() => handleMediaControl('NEXT')} className="text-gray-300 hover:text-white transition-colors"><SkipForward size={24} /></button>
           </div>
       </div>
     </WidgetCard>
   </div>
 );
 
-// --- 2. VISTA DE MAPA (Leaflet con Soporte 3D/2D) ---
+// --- 2. VISTA DE MAPA (Leaflet con Soporte 3D/2D Failsafe) ---
 const MapView = ({ carColor, is3D = false }) => {
   const mapRef = useRef(null);
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -230,19 +293,18 @@ const MapView = ({ carColor, is3D = false }) => {
 
     const initMap = () => {
       if (mapRef.current && window.L && !mapRef.current._leaflet_id) {
-        // En modo 3D (Widget de inicio), acercamos más la cámara (zoom 17)
         const map = window.L.map(mapRef.current, {
             zoomControl: !is3D, 
             dragging: !is3D, 
             scrollWheelZoom: !is3D,
             doubleClickZoom: !is3D
-        }).setView(DEFAULT_LOCATION, is3D ? 17 : 15);
+        }).setView(DEFAULT_LOCATION, is3D ? 16 : 15);
         
-        window.L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-          attribution: '© OpenStreetMap & CARTO'
+        window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap',
+          className: 'map-tiles-dark'
         }).addTo(map);
 
-        // Ícono del auto
         const carIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${carColor}" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><path d="M9 17h6"/><circle cx="17" cy="17" r="2"/></svg>`;
         const carIcon = window.L.divIcon({
             html: `<div style="width: 48px; height: 48px; filter: drop-shadow(0 10px 10px rgba(0,0,0,0.8)); transform: rotate(90deg);">${carIconSvg}</div>`,
@@ -252,6 +314,10 @@ const MapView = ({ carColor, is3D = false }) => {
         window.L.marker(DEFAULT_LOCATION, {icon: carIcon}).addTo(map);
         if(!is3D) window.L.control.zoom({ position: 'bottomright' }).addTo(map);
         
+        const style = document.createElement('style');
+        style.innerHTML = `.map-tiles-dark { filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%); }`;
+        document.head.appendChild(style);
+
         setMapLoaded(true);
       }
     };
@@ -259,13 +325,13 @@ const MapView = ({ carColor, is3D = false }) => {
   }, [carColor, is3D]);
 
   return (
-    <div className={`h-full w-full relative ${!is3D && 'rounded-3xl border border-white/10 shadow-2xl overflow-hidden'}`}>
+    <div className={`h-full w-full relative ${!is3D ? 'rounded-3xl border border-white/10 shadow-2xl overflow-hidden' : ''}`} style={{ minHeight: '100%', minWidth: '100%' }}>
       {!mapLoaded && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-900 z-20">
           <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-blue-500"></div>
         </div>
       )}
-      <div ref={mapRef} className="w-full h-full bg-gray-900"></div>
+      <div ref={mapRef} style={{ height: '100%', width: '100%' }} className="bg-gray-900"></div>
       
       {!is3D && (
         <div className="absolute top-6 left-6 z-[400] bg-black/70 backdrop-blur-md px-6 py-4 rounded-2xl border border-white/10 shadow-xl">
@@ -277,16 +343,18 @@ const MapView = ({ carColor, is3D = false }) => {
   );
 };
 
-// --- 3. MEDIA VIEW (Con interfaz espectacular simulada) ---
-const MediaView = () => {
+// --- 3. MEDIA VIEW (Conectada al reproductor real) ---
+const MediaView = ({ mediaData, handleMediaControl }) => {
   const launchApp = (pkg) => window.location.href = `intent://#Intent;package=${pkg};end;`;
 
   return (
     <div className="h-full w-full flex gap-6">
       {/* Panel Izquierdo: Apps Instaladas */}
       <WidgetCard className="w-1/3 flex flex-col p-6 relative">
-         <h2 className="text-2xl font-bold mb-2">Conexión Nativa</h2>
-         <p className="text-sm text-gray-400 mb-8">Inicia tu música directamente. El sistema web no puede extraer los datos de Spotify por seguridad de Android, pero esta interfaz simula la experiencia.</p>
+         <h2 className="text-2xl font-bold mb-2">Fuentes de Audio</h2>
+         <p className="text-sm text-gray-400 mb-8">
+             El servicio Nativo capturará automáticamente la música de estas apps una vez que le otorgues permisos.
+         </p>
          
          <div className="grid grid-cols-2 gap-4">
             <button onClick={() => launchApp('com.spotify.music')} className="bg-white/5 hover:bg-white/10 p-4 rounded-2xl flex flex-col items-center gap-3 transition-all border border-white/5">
@@ -306,43 +374,52 @@ const MediaView = () => {
                 <span className="font-semibold text-sm">Apple Music</span>
             </button>
          </div>
+         
+         <div className="mt-auto p-4 bg-blue-900/20 rounded-xl border border-blue-500/30">
+            <p className="text-xs text-blue-200">
+                <AlertTriangle size={14} className="inline mr-1" />
+                Asegúrate de haber habilitado el <b>"Acceso a Notificaciones"</b> para esta App en los ajustes de tu teléfono.
+            </p>
+         </div>
       </WidgetCard>
 
-      {/* Panel Derecho: Reproductor Simulado de Alta Gama */}
+      {/* Panel Derecho: Reproductor Real */}
       <WidgetCard className="w-2/3 relative overflow-hidden flex flex-col justify-end p-10">
-        <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=1000&auto=format&fit=crop')] bg-cover bg-center opacity-40"></div>
+        <div className="absolute inset-0 bg-cover bg-center opacity-30 blur-xl transition-all duration-700" style={{ backgroundImage: `url(${mediaData.albumArt})` }}></div>
         <div className="absolute inset-0 bg-gradient-to-t from-gray-950 via-gray-900/80 to-transparent"></div>
         
         <div className="relative z-10 flex gap-8 items-end">
-            <img src="https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=300&auto=format&fit=crop" alt="Album Art" className="w-48 h-48 rounded-2xl shadow-2xl border border-white/10 object-cover" />
+            <img src={mediaData.albumArt} alt="Album Art" className="w-48 h-48 rounded-2xl shadow-2xl border border-white/10 object-cover bg-gray-800" />
             
-            <div className="flex-1">
+            <div className="flex-1 overflow-hidden">
                 <div className="flex items-center gap-2 mb-2">
-                    <span className="bg-[#1DB954] text-black text-xs font-bold px-2 py-1 rounded-sm tracking-widest uppercase">Reproduciendo</span>
+                    <span className="bg-blue-600 text-white text-xs font-bold px-2 py-1 rounded-sm tracking-widest uppercase">
+                        {mediaData.isPlaying ? 'Reproduciendo' : 'Pausado'}
+                    </span>
                 </div>
-                <h1 className="text-5xl font-black mb-1 drop-shadow-md">Blinding Lights</h1>
-                <h2 className="text-2xl text-gray-300 font-medium mb-6">The Weeknd • After Hours</h2>
+                <h1 className="text-5xl font-black mb-1 drop-shadow-md truncate">{mediaData.title}</h1>
+                <h2 className="text-2xl text-gray-300 font-medium mb-6 truncate">{mediaData.artist}</h2>
                 
-                {/* Barra de Progreso */}
+                {/* Barra de Progreso Dinámica */}
                 <div className="flex items-center gap-4 mb-6">
-                    <span className="text-sm font-medium">1:24</span>
-                    <div className="flex-1 h-2 bg-gray-700/50 rounded-full overflow-hidden backdrop-blur-md cursor-pointer">
-                        <div className="h-full bg-white w-1/3 rounded-full relative">
+                    <span className="text-sm font-medium w-10">{mediaData.position}</span>
+                    <div className="flex-1 h-2 bg-gray-700/50 rounded-full overflow-hidden backdrop-blur-md">
+                        <div className="h-full bg-white rounded-full relative transition-all duration-1000 ease-linear" style={{ width: `${mediaData.progressPercent}%` }}>
                             <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-md"></div>
                         </div>
                     </div>
-                    <span className="text-sm font-medium text-gray-400">3:20</span>
+                    <span className="text-sm font-medium text-gray-400 w-10">{mediaData.duration}</span>
                 </div>
 
-                {/* Controles Principales */}
+                {/* Controles Activos */}
                 <div className="flex items-center gap-8">
                     <Volume2 size={24} className="text-gray-400" />
                     <div className="flex items-center gap-6 flex-1 justify-center">
-                        <button className="text-gray-300 hover:text-white transition-all"><SkipBack size={36} /></button>
-                        <button className="w-20 h-20 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-[0_0_30px_rgba(255,255,255,0.3)]">
-                            <Pause size={40} />
+                        <button onClick={() => handleMediaControl('PREVIOUS')} className="text-gray-300 hover:text-white hover:scale-110 transition-all"><SkipBack size={36} /></button>
+                        <button onClick={() => handleMediaControl('PLAY_PAUSE')} className="w-20 h-20 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-[0_0_30px_rgba(255,255,255,0.3)]">
+                            {mediaData.isPlaying ? <Pause size={40} /> : <Play size={40} className="ml-2" />}
                         </button>
-                        <button className="text-gray-300 hover:text-white transition-all"><SkipForward size={36} /></button>
+                        <button onClick={() => handleMediaControl('NEXT')} className="text-gray-300 hover:text-white hover:scale-110 transition-all"><SkipForward size={36} /></button>
                     </div>
                 </div>
             </div>
@@ -352,7 +429,7 @@ const MediaView = () => {
   );
 };
 
-// --- 4. DASHCAM VIEW (Ajustada para Android Nivel Nativo) ---
+// --- 4. DASHCAM VIEW ---
 const DashcamView = () => {
   const videoRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -379,8 +456,8 @@ const DashcamView = () => {
 
   const saveVideoNatively = async (blob) => {
       try {
-          // Intentamos usar Capacitor Filesystem si está instalado
-          const { Filesystem, Directory } = await import('@capacitor/filesystem');
+          const fsPkg = '@capacitor/filesystem';
+          const { Filesystem, Directory } = await import(/* @vite-ignore */ fsPkg);
           const reader = new FileReader();
           reader.readAsDataURL(blob);
           reader.onloadend = async () => {
@@ -390,11 +467,9 @@ const DashcamView = () => {
                   data: base64data,
                   directory: Directory.Documents
               });
-              alert("✅ Video de Dashcam guardado en la carpeta Documentos de tu teléfono.");
+              alert("✅ Video de Dashcam guardado en la carpeta Documentos.");
           };
       } catch (e) {
-          // Si falla (porque no instalaron el plugin), cae a la descarga web tradicional
-          console.warn("Plugin Filesystem no encontrado, usando descarga web", e);
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
@@ -403,7 +478,7 @@ const DashcamView = () => {
           a.click();
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
-          alert("✅ Video descargado en la carpeta de Descargas.");
+          alert("✅ Video descargado en Descargas.");
       }
   };
 
