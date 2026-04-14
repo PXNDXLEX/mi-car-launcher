@@ -20,9 +20,6 @@ export default function CarLauncher() {
   const [offlineMapDownloaded, setOfflineMapDownloaded] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
 
-  // Referencia al Plugin Nativo (Se inicializa dinámicamente)
-  const mediaPluginRef = useRef(null);
-
   // --- ESTADO DEL REPRODUCTOR NATIVO REAL ---
   const [mediaData, setMediaData] = useState({
     title: "Esperando música...",
@@ -34,7 +31,7 @@ export default function CarLauncher() {
     progressPercent: 0
   });
 
-  // Inyección de Tailwind CSS
+  // Inyección de Tailwind CSS asegurada
   useEffect(() => {
     if (!document.getElementById('tailwind-cdn')) {
       const script = document.createElement('script');
@@ -66,30 +63,27 @@ export default function CarLauncher() {
     return () => { if (watchId) navigator.geolocation.clearWatch(watchId); };
   }, []);
 
-  // Inicialización del Listener de Música Nativa
+  // Inicialización del Listener de Música Nativa usando window.Capacitor para evitar errores de compilación web
   useEffect(() => {
     let listener = null;
     const initMediaListener = async () => {
       try {
-        // Usamos importación dinámica para evitar errores en entornos sin Capacitor
-        const corePkg = '@capacitor/core';
-        const { registerPlugin } = await import(/* @vite-ignore */ corePkg);
-        mediaPluginRef.current = registerPlugin('MediaListenerPlugin');
-
-        // Escuchamos los eventos desde Android
-        listener = await mediaPluginRef.current.addListener('mediaUpdate', (info) => {
-          setMediaData({
-            title: info.title || "Desconocido",
-            artist: info.artist || "Desconocido",
-            albumArt: info.albumArt ? `data:image/jpeg;base64,${info.albumArt}` : "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=400&auto=format&fit=crop",
-            isPlaying: info.isPlaying || false,
-            duration: info.duration || "0:00",
-            position: info.position || "0:00",
-            progressPercent: info.progressPercent || 0
+        const plugin = window.Capacitor?.registerPlugin ? window.Capacitor.registerPlugin('MediaListenerPlugin') : null;
+        if (plugin) {
+          listener = await plugin.addListener('mediaUpdate', (info) => {
+            setMediaData({
+              title: info.title || "Desconocido",
+              artist: info.artist || "Desconocido",
+              albumArt: info.albumArt ? `data:image/jpeg;base64,${info.albumArt}` : "https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=400&auto=format&fit=crop",
+              isPlaying: info.isPlaying || false,
+              duration: info.duration || "0:00",
+              position: info.position || "0:00",
+              progressPercent: info.progressPercent || 0
+            });
           });
-        });
+        }
       } catch (e) {
-        console.warn("Plugin nativo de música no detectado o en vista previa web.");
+        console.warn("Plugin nativo de música no detectado.");
       }
     };
     initMediaListener();
@@ -99,8 +93,9 @@ export default function CarLauncher() {
   // Controles de Música Reales
   const handleMediaControl = async (action) => {
     try {
-      if (mediaPluginRef.current) {
-        await mediaPluginRef.current.controlMedia({ action });
+      const plugin = window.Capacitor?.registerPlugin ? window.Capacitor.registerPlugin('MediaListenerPlugin') : null;
+      if (plugin) {
+        await plugin.controlMedia({ action });
       }
     } catch (e) {
       console.warn(`No se pudo enviar el comando ${action}`);
@@ -300,6 +295,7 @@ const MapView = ({ carColor, is3D = false }) => {
             doubleClickZoom: !is3D
         }).setView(DEFAULT_LOCATION, is3D ? 16 : 15);
         
+        // Usamos OpenStreetMap estándar pero con un filtro CSS oscuro para mayor compatibilidad
         window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           attribution: '© OpenStreetMap',
           className: 'map-tiles-dark'
